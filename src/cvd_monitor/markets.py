@@ -1,0 +1,5 @@
+"""Market selection helpers."""
+
+DEFAULT_SYMBOLS = ['BTC-USDT']
+SPOT_MARKETS = ['BTCUSDT.SPOT']
+FUTURES_MARKETS = ['BTCUSDT.PERP']
