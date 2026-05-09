@@ -1,5 +1,34 @@
 """Market selection helpers."""
 
-DEFAULT_SYMBOLS = ['BTC-USDT']
-SPOT_MARKETS = ['BTCUSDT.SPOT']
-FUTURES_MARKETS = ['BTCUSDT.PERP']
+from __future__ import annotations
+
+from typing import Any
+
+EXCHANGE_MAP: dict[str, str] = {
+    "binance": "Binance",
+    "bybit": "Bybit",
+    "okx": "OKX",
+    "coinbase": "Coinbase",
+    "kraken": "Kraken",
+    "bitfinex": "Bitfinex",
+}
+
+
+def normalize_exchange_name(exchange_code: str) -> str:
+    return EXCHANGE_MAP.get(exchange_code.lower(), exchange_code)
+
+
+def filter_btc_markets(markets: list[dict[str, Any]], exchange_code: str | None = None) -> list[dict[str, Any]]:
+    """Return BTC markets, optionally filtered by exchange code."""
+
+    filtered: list[dict[str, Any]] = []
+    for market in markets:
+        symbol = str(market.get("symbol", "")).upper()
+        base_asset = str(market.get("base_asset", market.get("base", ""))).upper()
+        exchange = normalize_exchange_name(str(market.get("exchange", market.get("exchange_code", ""))))
+        if "BTC" not in {base_asset, symbol} and not symbol.startswith("BTC"):
+            continue
+        if exchange_code and exchange.lower() != exchange_code.lower() and str(market.get("exchange_code", "")).lower() != exchange_code.lower():
+            continue
+        filtered.append(market)
+    return filtered
