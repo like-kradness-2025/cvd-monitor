@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Sequence
 
 import matplotlib
-import pandas as pd
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -14,12 +13,12 @@ import matplotlib.pyplot as plt
 from .database import CVDRecord
 
 
-def build_dashboard(records: Sequence[CVDRecord], output_path: str = "artifacts/dashboard.png") -> Path | pd.DataFrame:
+def build_dashboard(records: Sequence[CVDRecord], output_path: str = "artifacts/dashboard.png") -> Path | None:
     path = Path(output_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
     if not records:
-        return pd.DataFrame(columns=["timestamp", "price", "spot_cvd", "futures_cvd"])
+        return None
 
     timestamps = [record.timestamp for record in records]
     prices = [record.price for record in records]

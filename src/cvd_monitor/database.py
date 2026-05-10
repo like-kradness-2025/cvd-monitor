@@ -76,11 +76,11 @@ class Database:
                 """
                 SELECT symbol, timeframe, timestamp, price, spot_cvd, futures_cvd
                 FROM cvd_data
-                WHERE symbol LIKE ? AND timeframe = ?
+                WHERE symbol = ? AND timeframe = ?
                 ORDER BY timestamp DESC
                 LIMIT ?
                 """,
-                (f"{symbol}%", timeframe, limit),
+                (symbol, timeframe, limit),
             ).fetchall()
         return [
             CVDRecord(

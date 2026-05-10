@@ -27,6 +27,13 @@ def send_chart(webhook_url: str | None, image_path: str, max_retries: int = 3) -
             with path.open("rb") as fh:
                 files: dict[str, tuple[str, Any, str]] = {"file": (path.name, fh, "image/png")}
                 response = requests.post(webhook_url, files=files, timeout=30)
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    sleep_seconds = min(max(float(retry_after) if retry_after else 1.0, 0.0), 120.0)
+                    if attempt < max_retries:
+                        time.sleep(sleep_seconds)
+                        continue
+                    raise DiscordSenderError("Discord rate limited")
                 response.raise_for_status()
             return True
         except requests.RequestException as exc:

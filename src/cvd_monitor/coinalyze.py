@@ -5,10 +5,19 @@ from __future__ import annotations
 import os
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
 import requests
-from requests import Response, Session
+
+
+class _SessionLike(Protocol):
+    def get(
+        self,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, Any] | None,
+        timeout: float,
+    ) -> Any: ...
 
 
 @dataclass(slots=True)
@@ -29,7 +38,7 @@ class CoinAlYZeClient:
         base_url: str = "https://api.coinalyze.net/v1",
         timeout: float = 30.0,
         max_retries: int = 3,
-        session: Session | None = None,
+        session: _SessionLike | None = None,
     ) -> None:
         self.api_key = api_key or os.getenv("COINALYZE_API_KEY")
         self.base_url = base_url.rstrip("/")

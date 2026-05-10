@@ -26,7 +26,9 @@ def filter_btc_markets(markets: list[dict[str, Any]], exchange_code: str | None 
         symbol = str(market.get("symbol", "")).upper()
         base_asset = str(market.get("base_asset", market.get("base", ""))).upper()
         exchange = normalize_exchange_name(str(market.get("exchange", market.get("exchange_code", ""))))
-        if "BTC" not in {base_asset, symbol} and not symbol.startswith("BTC"):
+        is_btc_symbol = symbol == "BTC" or symbol.startswith("BTC/") or symbol.startswith("BTC-") or symbol.startswith("BTC_") or symbol.startswith("BTC")
+        is_btc_base = base_asset == "BTC"
+        if not (is_btc_symbol or is_btc_base):
             continue
         if exchange_code and exchange.lower() != exchange_code.lower() and str(market.get("exchange_code", "")).lower() != exchange_code.lower():
             continue
