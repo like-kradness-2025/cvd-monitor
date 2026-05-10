@@ -78,3 +78,15 @@ def test_coinalyze_client_fails_on_invalid_json(monkeypatch: pytest.MonkeyPatch)
 
     with pytest.raises(CoinAlYZeError):
         client.exchanges()
+
+
+def test_coinalyze_ohlcv_history_normalizes_interval_and_uses_required_range() -> None:
+    session = DummySession([DummyResponse({"data": [{"t": 1}]})])
+    client = CoinAlYZeClient(base_url="https://example.test", session=session)
+
+    data = client.ohlcv_history("BTCUSDT", 100, 200, "1h")
+
+    assert data.symbol == "BTCUSDT"
+    assert data.timeframe == "1hour"
+    assert data.ohlcv == [{"t": 1}]
+    assert session.calls[0][2] == {"symbols": "BTCUSDT", "interval": "1hour", "from": 100, "to": 200}

@@ -52,6 +52,32 @@ class CoinAlYZeClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         return headers
 
+    def _normalize_interval(self, timeframe: str) -> str:
+        mapping = {
+            "1m": "1min",
+            "1min": "1min",
+            "5m": "5min",
+            "5min": "5min",
+            "15m": "15min",
+            "15min": "15min",
+            "30m": "30min",
+            "30min": "30min",
+            "1h": "1hour",
+            "1hour": "1hour",
+            "2h": "2hour",
+            "2hour": "2hour",
+            "4h": "4hour",
+            "4hour": "4hour",
+            "6h": "6hour",
+            "6hour": "6hour",
+            "12h": "12hour",
+            "12hour": "12hour",
+            "1d": "daily",
+            "1day": "daily",
+            "daily": "daily",
+        }
+        return mapping.get(timeframe.lower(), timeframe)
+
     def _request(self, path: str, params: dict[str, Any] | None = None) -> Any:
         url = f"{self.base_url}/{path.lstrip('/')}"
         last_error: Exception | None = None
@@ -98,10 +124,11 @@ class CoinAlYZeClient:
         data = self._request("future-markets")
         return list(data) if isinstance(data, list) else data.get("data", [])
 
-    def ohlcv_history(self, symbol: str, timeframe: str = "1h", limit: int = 500) -> MarketData:
+    def ohlcv_history(self, symbols: str, from_ts: int, to_ts: int, interval: str = "1h") -> MarketData:
+        normalized_interval = self._normalize_interval(interval)
         data = self._request(
             "ohlcv-history",
-            params={"symbol": symbol, "interval": timeframe, "limit": limit},
+            params={"symbols": symbols, "interval": normalized_interval, "from": from_ts, "to": to_ts},
         )
         ohlcv = data if isinstance(data, list) else data.get("data", data.get("ohlcv", []))
-        return MarketData(symbol=symbol, timeframe=timeframe, ohlcv=list(ohlcv))
+        return MarketData(symbol=symbols, timeframe=normalized_interval, ohlcv=list(ohlcv))
