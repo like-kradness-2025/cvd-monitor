@@ -54,7 +54,7 @@ class TestScript(unittest.TestCase):
                 type("R", (), {"ok": True, "data": [{"history": [{"t": 1, "v": 10, "bv": 6}]}], "status": 200, "error": None, "retry_after": None})(),
                 type("R", (), {"ok": False, "data": {"error": "rate limit"}, "status": 429, "error": "HTTP 429", "retry_after": 120})(),
             ]
-            with patch.object(script, "load_api_key", return_value="k"), patch.object(script, "fetch_ohlcv_history", side_effect=responses):
+            with patch.object(script, "load_api_key", return_value="k"), patch.object(script, "fetch_ohlcv_history", side_effect=responses), patch.object(script.time, "sleep"):
                 with patch.object(sys, "argv", ["x", "--symbols-file", str(symbols_file), "--db", str(db_path), "--limit", "2", "--sleep-seconds", "0"]):
                     rc = script.main()
         self.assertEqual(rc, 1)
@@ -74,7 +74,7 @@ class TestScript(unittest.TestCase):
                 type("R", (), {"ok": True, "data": [{"history": [{"t": 1, "v": 10, "bv": 6}]}], "status": 200, "error": None, "retry_after": None})(),
                 type("R", (), {"ok": False, "data": {"error": "rate limit"}, "status": 429, "error": "HTTP 429", "retry_after": 120})(),
             ]
-            with patch.object(script, "load_api_key", return_value="k"), patch.object(script, "fetch_ohlcv_history", side_effect=responses):
+            with patch.object(script, "load_api_key", return_value="k"), patch.object(script, "fetch_ohlcv_history", side_effect=responses), patch.object(script.time, "sleep"):
                 with patch.object(sys, "argv", ["x", "--symbols-file", str(symbols_file), "--db", str(db_path), "--limit", "2", "--sleep-seconds", "0", "--allow-partial-success"]):
                     rc = script.main()
         self.assertEqual(rc, 0)
@@ -94,7 +94,7 @@ class TestScript(unittest.TestCase):
             failure = type("R", (), {"ok": False, "data": {"error": "rate limit"}, "status": 429, "error": "HTTP 429", "retry_after": 120})()
             fetch_mock = patch.object(script, "fetch_ohlcv_history", return_value=failure)
             save_error_calls = []
-            with patch.object(script, "load_api_key", return_value="DUMMY_SECRET"), fetch_mock, patch.object(script, "save_error", side_effect=lambda *a, **k: save_error_calls.append((a, k))), patch.object(sys, "argv", ["x", "--symbols-file", str(symbols_file), "--db", str(db_path), "--limit", "3", "--sleep-seconds", "0", "--max-consecutive-failures", "10", "--max-rate-limit-count", "2"]):
+            with patch.object(script, "load_api_key", return_value="DUMMY_SECRET"), fetch_mock, patch.object(script.time, "sleep"), patch.object(script, "save_error", side_effect=lambda *a, **k: save_error_calls.append((a, k))), patch.object(sys, "argv", ["x", "--symbols-file", str(symbols_file), "--db", str(db_path), "--limit", "3", "--sleep-seconds", "0", "--max-consecutive-failures", "10", "--max-rate-limit-count", "2"]):
                 rc = script.main()
         self.assertEqual(rc, 1)
         self.assertEqual(len(save_error_calls), 4)

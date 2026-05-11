@@ -10,7 +10,13 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
+from cvd_monitor.env import load_env
+
 API_URL = "https://api.coinalyze.net/v1/ohlcv-history"
+OPEN_INTEREST_API_URL = "https://api.coinalyze.net/v1/open-interest-history"
+FUNDING_RATE_API_URL = "https://api.coinalyze.net/v1/funding-rate-history"
+LIQUIDATION_API_URL = "https://api.coinalyze.net/v1/liquidation-history"
+LONG_SHORT_RATIO_API_URL = "https://api.coinalyze.net/v1/long-short-ratio-history"
 
 
 def _clamp_retry_after(value: float | None, *, min_seconds: float = 1.0, max_seconds: float = 120.0) -> float | None:
@@ -31,32 +37,43 @@ class FetchResult:
 
 
 def load_api_key() -> str | None:
+    """Load the Coinalyze API key from the environment.
+
+    The default transport is a request header to avoid leaking credentials in
+    URLs. Set COINALYZE_API_KEY_TRANSPORT=query for legacy query-string
+    behavior, and optionally override the header name with
+    COINALYZE_API_KEY_HEADER.
+    """
     key = os.environ.get("COINALYZE_API_KEY")
     if key:
         return key.strip() or None
-    env_path = os.path.join(os.getcwd(), ".env")
-    if os.path.exists(env_path):
-        with open(env_path, "r", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, v = line.split("=", 1)
-                if k.strip() == "COINALYZE_API_KEY":
-                    return v.strip().strip('"').strip("'") or None
     return None
 
 
-def _request(url: str, timeout: int = 30) -> tuple[int, bytes, dict[str, str]]:
-    req = urllib.request.Request(url, method="GET")
+def _request(url: str, timeout: int = 30, headers: dict[str, str] | None = None) -> tuple[int, bytes, dict[str, str]]:
+    req = urllib.request.Request(url, method="GET", headers=headers or {})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         headers = {k.lower(): v for k, v in resp.headers.items()}
         return resp.status, resp.read(), headers
 
 
-def _build_url(*, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str) -> str:
-    params = urllib.parse.urlencode({"symbols": symbol, "interval": interval, "from": str(from_ts), "to": str(to_ts), "api_key": api_key})
-    return f"{API_URL}?{params}"
+def _api_key_transport_mode() -> str:
+    return os.environ.get("COINALYZE_API_KEY_TRANSPORT", "header").strip().lower() or "header"
+
+
+def _build_request_headers(api_key: str) -> dict[str, str]:
+    mode = _api_key_transport_mode()
+    if mode == "query":
+        return {}
+    header_name = os.environ.get("COINALYZE_API_KEY_HEADER", "X-API-KEY").strip() or "X-API-KEY"
+    return {header_name: api_key}
+
+
+def _build_history_url(base_url: str, *, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str) -> str:
+    params = {"symbols": symbol, "interval": interval, "from": str(from_ts), "to": str(to_ts)}
+    if _api_key_transport_mode() == "query":
+        params["api_key"] = api_key
+    return f"{base_url}?{urllib.parse.urlencode(params)}"
 
 
 SECRET_PATTERNS = (
@@ -118,14 +135,34 @@ def _sanitize_error_message(message: str, url: str) -> str:
     return sanitize_for_persistence(message.replace(url, API_URL))
 
 
-def fetch_ohlcv_history(*, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str, timeout: int = 30, max_retries: int = 1, min_retry_after_seconds: float = 1.0, max_retry_after_seconds: float = 120.0) -> FetchResult:
-    url = _build_url(symbol=symbol, interval=interval, from_ts=from_ts, to_ts=to_ts, api_key=api_key)
+def _parse_retry_after(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
+def _retry_after_or_backoff(retry_after: float | None, backoff: float) -> float:
+    return retry_after if retry_after is not None else backoff
+
+
+def _build_history_url(base_url: str, *, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str) -> str:
+    params = {"symbols": symbol, "interval": interval, "from": str(from_ts), "to": str(to_ts)}
+    if _api_key_transport_mode() == "query":
+        params["api_key"] = api_key
+    return f"{base_url}?{urllib.parse.urlencode(params)}"
+
+
+
+def _fetch_history_impl(url: str, api_key: str, timeout: int, max_retries: int, min_retry_after_seconds: float, max_retry_after_seconds: float) -> FetchResult:
     attempt = 0
     backoff = 1.0
     while True:
         attempt += 1
         try:
-            status, body, headers = _request(url, timeout=timeout)
+            status, body, headers = _request(url, timeout=timeout, headers=_build_request_headers(api_key))
             data = json.loads(body.decode("utf-8")) if body else None
             if status >= 400:
                 retry_after = _clamp_retry_after(_parse_retry_after(headers.get("retry-after")), min_seconds=min_retry_after_seconds, max_seconds=max_retry_after_seconds) if status == 429 else None
@@ -150,18 +187,33 @@ def fetch_ohlcv_history(*, symbol: str, interval: str, from_ts: int, to_ts: int,
                 continue
             return FetchResult(False, exc.code, data, _sanitize_error_message(str(exc), url), retry_after)
         except Exception as exc:
+            if attempt <= max_retries:
+                time.sleep(backoff)
+                backoff *= 2
+                continue
             return FetchResult(False, None, None, _sanitize_error_message(str(exc), url), None)
 
 
-def _parse_retry_after(value: str | None) -> float | None:
-    if not value:
-        return None
-    try:
-        return float(value)
-    except ValueError:
-        return None
+def fetch_ohlcv_history(*, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str, timeout: int = 30, max_retries: int = 1, min_retry_after_seconds: float = 1.0, max_retry_after_seconds: float = 120.0) -> FetchResult:
+    url = _build_history_url(API_URL, symbol=symbol, interval=interval, from_ts=from_ts, to_ts=to_ts, api_key=api_key)
+    return _fetch_history_impl(url, api_key=api_key, timeout=timeout, max_retries=max_retries, min_retry_after_seconds=min_retry_after_seconds, max_retry_after_seconds=max_retry_after_seconds)
 
 
-def _retry_after_or_backoff(retry_after: float | None, backoff: float) -> float:
-    """Use the server-provided delay when valid; otherwise fall back to exponential backoff."""
-    return retry_after if retry_after is not None else backoff
+def fetch_open_interest_history(*, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str, timeout: int = 30, max_retries: int = 1, min_retry_after_seconds: float = 1.0, max_retry_after_seconds: float = 120.0) -> FetchResult:
+    url = _build_history_url(OPEN_INTEREST_API_URL, symbol=symbol, interval=interval, from_ts=from_ts, to_ts=to_ts, api_key=api_key)
+    return _fetch_history_impl(url, api_key=api_key, timeout=timeout, max_retries=max_retries, min_retry_after_seconds=min_retry_after_seconds, max_retry_after_seconds=max_retry_after_seconds)
+
+
+def fetch_funding_rate_history(*, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str, timeout: int = 30, max_retries: int = 1, min_retry_after_seconds: float = 1.0, max_retry_after_seconds: float = 120.0) -> FetchResult:
+    url = _build_history_url(FUNDING_RATE_API_URL, symbol=symbol, interval=interval, from_ts=from_ts, to_ts=to_ts, api_key=api_key)
+    return _fetch_history_impl(url, api_key=api_key, timeout=timeout, max_retries=max_retries, min_retry_after_seconds=min_retry_after_seconds, max_retry_after_seconds=max_retry_after_seconds)
+
+
+def fetch_liquidation_history(*, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str, timeout: int = 30, max_retries: int = 1, min_retry_after_seconds: float = 1.0, max_retry_after_seconds: float = 120.0) -> FetchResult:
+    url = _build_history_url(LIQUIDATION_API_URL, symbol=symbol, interval=interval, from_ts=from_ts, to_ts=to_ts, api_key=api_key)
+    return _fetch_history_impl(url, api_key=api_key, timeout=timeout, max_retries=max_retries, min_retry_after_seconds=min_retry_after_seconds, max_retry_after_seconds=max_retry_after_seconds)
+
+
+def fetch_long_short_ratio_history(*, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str, timeout: int = 30, max_retries: int = 1, min_retry_after_seconds: float = 1.0, max_retry_after_seconds: float = 120.0) -> FetchResult:
+    url = _build_history_url(LONG_SHORT_RATIO_API_URL, symbol=symbol, interval=interval, from_ts=from_ts, to_ts=to_ts, api_key=api_key)
+    return _fetch_history_impl(url, api_key=api_key, timeout=timeout, max_retries=max_retries, min_retry_after_seconds=min_retry_after_seconds, max_retry_after_seconds=max_retry_after_seconds)
