@@ -15,22 +15,46 @@ EXCHANGE_MAP: dict[str, str] = {
 
 
 def normalize_exchange_name(exchange_code: str) -> str:
-    return EXCHANGE_MAP.get(exchange_code.lower(), exchange_code)
+    normalized = exchange_code.strip()
+    if not normalized:
+        return ""
+    return EXCHANGE_MAP.get(normalized.lower(), normalized)
 
 
 def filter_btc_markets(markets: list[dict[str, Any]], exchange_code: str | None = None) -> list[dict[str, Any]]:
-    """Return BTC markets, optionally filtered by exchange code."""
+    """Return BTC markets, optionally filtered by exchange code/name."""
 
+    target_exchange = normalize_exchange_name(exchange_code or "").lower()
     filtered: list[dict[str, Any]] = []
+
     for market in markets:
-        symbol = str(market.get("symbol", "")).upper()
-        base_asset = str(market.get("base_asset", market.get("base", ""))).upper()
-        exchange = normalize_exchange_name(str(market.get("exchange", market.get("exchange_code", ""))))
-        is_btc_symbol = symbol == "BTC" or symbol.startswith("BTC/") or symbol.startswith("BTC-") or symbol.startswith("BTC_") or symbol.startswith("BTC")
-        is_btc_base = base_asset == "BTC"
-        if not (is_btc_symbol or is_btc_base):
+        if not _is_btc_market(market):
             continue
-        if exchange_code and exchange.lower() != exchange_code.lower() and str(market.get("exchange_code", "")).lower() != exchange_code.lower():
+        if target_exchange and target_exchange not in _market_exchange_candidates(market):
             continue
         filtered.append(market)
+
     return filtered
+
+
+def pick_first_symbol(markets: list[dict[str, Any]], default_symbol: str) -> str:
+    for market in markets:
+        symbol = market.get("symbol")
+        if symbol:
+            return str(symbol)
+    return default_symbol
+
+
+def _is_btc_market(market: dict[str, Any]) -> bool:
+    symbol = str(market.get("symbol", "")).upper()
+    base_asset = str(market.get("base_asset", market.get("base", ""))).upper()
+    return base_asset == "BTC" or symbol in {"BTC", "BTCUSDT", "BTCUSD"} or symbol.startswith(("BTC/", "BTC-", "BTC_"))
+
+
+def _market_exchange_candidates(market: dict[str, Any]) -> set[str]:
+    values = {
+        str(market.get("exchange", "")),
+        str(market.get("exchange_code", "")),
+        str(market.get("market", "")),
+    }
+    return {normalize_exchange_name(value).lower() for value in values if value}
