@@ -4,13 +4,29 @@ import os
 from pathlib import Path
 from typing import Iterable
 
-_ENV_LOADED = False
+
+def _normalize_path(path: Path) -> Path:
+    path = path.expanduser()
+    return path if path.is_absolute() else path.resolve()
 
 
 def _load_env_file(path: Path) -> None:
-    if not path.exists():
+    path = _normalize_path(path)
+    if path.is_dir():
+        raise NotADirectoryError(f"environment file path points to a directory: {path}")
+
+    try:
+        if not path.exists():
+            return
+        content = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
         return
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
+    except PermissionError as exc:
+        raise PermissionError(f"cannot read environment file {path}: permission denied") from exc
+    except OSError as exc:
+        raise OSError(f"failed to read environment file {path}: {exc}") from exc
+
+    for raw_line in content.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("#") or "=" not in line:
             continue
@@ -21,12 +37,8 @@ def _load_env_file(path: Path) -> None:
 
 
 def load_env(*, candidates: Iterable[Path] | None = None) -> None:
-    global _ENV_LOADED
-    if _ENV_LOADED:
-        return
     if candidates is None:
         here = Path(__file__).resolve()
         candidates = (here.parent.parent / ".env", Path.cwd() / ".env")
     for candidate in candidates:
         _load_env_file(candidate)
-    _ENV_LOADED = True

@@ -76,6 +76,9 @@ class TestClient(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.status, 503)
         self.assertIsNotNone(result.error)
+        self.assertIn("attempt 1/2", result.error)
+        self.assertIn("timeout=30s", result.error)
+        self.assertIn("url=https://api.coinalyze.net/v1/ohlcv-history", result.error)
 
     def test_transient_non_429_failure_is_retried_once(self) -> None:
         calls = []

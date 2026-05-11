@@ -13,7 +13,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from cvd_monitor.config import _parse_bool, load_symbols, parse_args
+from cvd_monitor.config import _parse_bool, load_symbols, normalize_config_path, parse_args
 from cvd_monitor.env import load_env
 
 
@@ -44,15 +44,16 @@ class TestConfig(unittest.TestCase):
             self.assertEqual(loaded[0]["exchange"], "binance")
             self.assertEqual(loaded[0]["exchange_code"], "binance")
             self.assertEqual(loaded[1]["exchange_name"], "binance")
+            self.assertTrue(Path(loaded[0]["exchange"] or "").is_absolute() is False)
 
             invalid_json_path = base / "invalid.json"
             invalid_json_path.write_text("{not-json", encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, r"invalid JSON in symbols file:"):
+            with self.assertRaisesRegex(ValueError, r"invalid JSON in symbols file .*invalid\.json:"):
                 load_symbols(str(invalid_json_path), "all")
 
             array_path = base / "array.json"
             array_path.write_text(json.dumps({"symbol": "BTCUSDT"}), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "symbols file must contain a JSON array"):
+            with self.assertRaisesRegex(ValueError, r"symbols file must contain a JSON array:"):
                 load_symbols(str(array_path), "all")
 
             empty_array_path = base / "empty_array.json"
@@ -114,6 +115,37 @@ class TestConfig(unittest.TestCase):
                     args = parse_args()
         self.assertEqual(args.limit, 7)
         self.assertTrue(args.allow_partial_success)
+        self.assertTrue(Path(args.db).is_absolute())
+        self.assertTrue(Path(args.symbols_file).is_absolute())
+
+    def test_normalize_config_path_handles_whitespace_tilde_and_relative_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            with patch.dict(os.environ, {"HOME": str(base / "home")}, clear=True):
+                self.assertEqual(normalize_config_path("  ~/data/file.json  ", label="symbols file"), str((base / "home" / "data" / "file.json").resolve()))
+            with patch.dict(os.environ, {}, clear=True):
+                rel_dir = base / "relative"
+                rel_dir.mkdir()
+                old_cwd = os.getcwd()
+                try:
+                    os.chdir(rel_dir)
+                    self.assertEqual(normalize_config_path("./symbols.json", label="symbols file"), str((rel_dir / "symbols.json").resolve()))
+                    self.assertEqual(normalize_config_path("subdir/../symbols.json", label="symbols file"), str((rel_dir / "symbols.json").resolve()))
+                finally:
+                    os.chdir(old_cwd)
+
+    def test_load_env_reloads_again_after_cwd_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as td1, tempfile.TemporaryDirectory() as td2:
+            dir1 = Path(td1)
+            dir2 = Path(td2)
+            (dir1 / ".env").write_text("CVD_MONITOR_LIMIT=7\n", encoding="utf-8")
+            (dir2 / ".env").write_text("CVD_MONITOR_HOURS=9\n", encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=True), patch("cvd_monitor.env.Path.cwd", side_effect=[dir1, dir2, dir2]):
+                load_env()
+                self.assertEqual(os.environ["CVD_MONITOR_LIMIT"], "7")
+                load_env()
+                self.assertEqual(os.environ["CVD_MONITOR_LIMIT"], "7")
+                self.assertEqual(os.environ["CVD_MONITOR_HOURS"], "9")
 
 
 if __name__ == "__main__":

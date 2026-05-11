@@ -11,7 +11,9 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from cvd_monitor.storage import OHLCVRecord, get_last_fetched_timestamp, init_db, save_error, upsert_fetch_state, upsert_ohlcv_records
+from cvd_monitor.db import get_schema_version, migrate
+from cvd_monitor.schemas import SCHEMA_VERSION, OHLCVRecord
+from cvd_monitor.storage import StorageDependencies, StorageNotFoundError, get_last_fetched_timestamp, init_db, save_error, upsert_fetch_state, upsert_ohlcv_records
 
 
 class TestStorage(unittest.TestCase):
@@ -19,6 +21,15 @@ class TestStorage(unittest.TestCase):
         self.tmp = tempfile.NamedTemporaryFile(suffix=".sqlite3", delete=False)
         self.tmp.close()
         self.conn = sqlite3.connect(self.tmp.name)
+        init_db(self.conn)
+
+    def test_schema_version_is_initialized(self) -> None:
+        self.assertEqual(get_schema_version(self.conn), SCHEMA_VERSION)
+        self.assertEqual(migrate(self.conn), SCHEMA_VERSION)
+
+    def test_dependency_injection_defaults_work(self) -> None:
+        deps = StorageDependencies(db_path=self.tmp.name)
+        self.assertEqual(deps.db_path, self.tmp.name)
         init_db(self.conn)
 
     def tearDown(self) -> None:
@@ -54,6 +65,73 @@ class TestStorage(unittest.TestCase):
         self.assertNotIn("SECRET_VALUE", row[0])
         self.assertNotIn("SECRET_VALUE", row[1])
         self.assertIn("[REDACTED]", row[0])
+
+    def test_save_error_commits_inserted_row(self) -> None:
+        save_error(self.conn, run_id=None, symbol="BTCUSD.C", exchange="Coinbase", market_type="spot", interval="1m", error_type="fetch_error", message="boom", raw_json={"detail": "boom"})
+        self.conn.close()
+        self.conn = sqlite3.connect(self.tmp.name)
+        row = self.conn.execute("SELECT message, raw_json FROM fetch_errors ORDER BY id DESC LIMIT 1").fetchone()
+        self.assertIsNotNone(row)
+        self.assertEqual(row[0], "boom")
+        self.assertIn("boom", row[1])
+
+    def test_finalize_fetch_run_returns_true_and_updates_exactly_one_row(self) -> None:
+        run_id = self.conn.execute("INSERT INTO fetch_runs (started_at, symbols_file, db_path, interval, hours, limit_symbols, sleep_seconds, market_type, dry_run, status, requested_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (1, "symbols.json", self.tmp.name, "1m", 1, 1, 0.0, "spot", 0, "running", 1)).lastrowid
+        self.conn.commit()
+        from cvd_monitor.storage import finalize_fetch_run
+        self.assertTrue(finalize_fetch_run(self.conn, int(run_id), status="success", succeeded_count=1, failed_count=0, warning_count=0))
+        row = self.conn.execute("SELECT status, succeeded_count, failed_count, warning_count FROM fetch_runs WHERE id = ?", (run_id,)).fetchone()
+        self.assertEqual(tuple(row), ("success", 1, 0, 0))
+
+    def test_finalize_fetch_run_raises_for_missing_run_id(self) -> None:
+        from cvd_monitor.storage import finalize_fetch_run
+        with self.assertRaises(StorageNotFoundError):
+            finalize_fetch_run(self.conn, 999999, status="success", succeeded_count=1, failed_count=0, warning_count=0)
+
+    def test_finalize_fetch_run_rejects_active_transaction(self) -> None:
+        from cvd_monitor.storage import finalize_fetch_run
+
+        self.conn.execute("BEGIN")
+        self.assertTrue(self.conn.in_transaction)
+        with self.assertRaisesRegex(RuntimeError, r"must be called in autocommit mode.*caller-managed transaction"):
+            finalize_fetch_run(self.conn, 999999, status="success", succeeded_count=1, failed_count=0, warning_count=0)
+        self.assertTrue(self.conn.in_transaction)
+        self.conn.rollback()
+
+    def test_finalize_fetch_run_rejects_implicit_transaction_from_prior_write(self) -> None:
+        from cvd_monitor.storage import finalize_fetch_run
+
+        self.conn.execute("INSERT INTO fetch_errors (run_id, symbol, exchange, market_type, interval, error_type, message, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (None, None, None, None, None, "test_error", "boom", 1))
+        self.assertTrue(self.conn.in_transaction)
+        with self.assertRaisesRegex(RuntimeError, r"must be called in autocommit mode.*caller-managed transaction"):
+            finalize_fetch_run(self.conn, 999999, status="success", succeeded_count=1, failed_count=0, warning_count=0)
+        self.conn.rollback()
+
+    def test_finalize_fetch_run_rejects_savepoint_context(self) -> None:
+        from cvd_monitor.storage import finalize_fetch_run
+
+        self.conn.execute("SAVEPOINT sp1")
+        self.assertTrue(self.conn.in_transaction)
+        with self.assertRaisesRegex(RuntimeError, r"must be called in autocommit mode.*caller-managed transaction"):
+            finalize_fetch_run(self.conn, 999999, status="success", succeeded_count=1, failed_count=0, warning_count=0)
+        self.conn.execute("ROLLBACK TO sp1")
+        self.conn.execute("RELEASE sp1")
+
+    def test_finalize_fetch_run_leaves_connection_usable_after_missing_run_id(self) -> None:
+        from cvd_monitor.storage import finalize_fetch_run
+
+        self.assertFalse(self.conn.in_transaction)
+        with self.assertRaises(StorageNotFoundError):
+            finalize_fetch_run(self.conn, 999999, status="success", succeeded_count=1, failed_count=0, warning_count=0)
+        self.assertFalse(self.conn.in_transaction)
+
+        # The same connection should still support subsequent writes and reads.
+        run_id = self.conn.execute("INSERT INTO fetch_runs (started_at, symbols_file, db_path, interval, hours, limit_symbols, sleep_seconds, market_type, dry_run, status, requested_count) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (2, "symbols.json", self.tmp.name, "1m", 1, 1, 0.0, "spot", 0, "running", 1)).lastrowid
+        self.conn.commit()
+        self.assertTrue(finalize_fetch_run(self.conn, int(run_id), status="success", succeeded_count=2, failed_count=0, warning_count=0))
+        row = self.conn.execute("SELECT status, succeeded_count, failed_count, warning_count FROM fetch_runs WHERE id = ?", (run_id,)).fetchone()
+        self.assertEqual(tuple(row), ("success", 2, 0, 0))
+        self.assertFalse(self.conn.in_transaction)
 
 
 if __name__ == "__main__":

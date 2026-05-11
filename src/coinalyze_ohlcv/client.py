@@ -159,6 +159,7 @@ def _build_history_url(base_url: str, *, symbol: str, interval: str, from_ts: in
 def _fetch_history_impl(url: str, api_key: str, timeout: int, max_retries: int, min_retry_after_seconds: float, max_retry_after_seconds: float) -> FetchResult:
     attempt = 0
     backoff = 1.0
+    started_at = time.time()
     while True:
         attempt += 1
         try:
@@ -170,7 +171,9 @@ def _fetch_history_impl(url: str, api_key: str, timeout: int, max_retries: int, 
                     time.sleep(_retry_after_or_backoff(retry_after, backoff))
                     backoff *= 2
                     continue
-                return FetchResult(False, status, data, _sanitize_error_message(f"HTTP {status} {url}", url), retry_after)
+                elapsed = int(time.time() - started_at)
+                msg = f"HTTP {status} after {elapsed}s (attempt {attempt}/{max_retries + 1}, timeout={timeout}s, url={url}, retry_after={retry_after if retry_after is not None else 'n/a'})"
+                return FetchResult(False, status, data, _sanitize_error_message(msg, url), retry_after)
             return FetchResult(True, status, data, None, None)
         except urllib.error.HTTPError as exc:
             body = exc.read() if hasattr(exc, "read") else b""
@@ -185,13 +188,17 @@ def _fetch_history_impl(url: str, api_key: str, timeout: int, max_retries: int, 
                 time.sleep(retry_after if retry_after is not None else backoff)
                 backoff *= 2
                 continue
-            return FetchResult(False, exc.code, data, _sanitize_error_message(str(exc), url), retry_after)
+            elapsed = int(time.time() - started_at)
+            msg = f"HTTP {exc.code} after {elapsed}s (attempt {attempt}/{max_retries + 1}, timeout={timeout}s, url={url}, retry_after={retry_after if retry_after is not None else 'n/a'})"
+            return FetchResult(False, exc.code, data, _sanitize_error_message(msg, url), retry_after)
         except Exception as exc:
             if attempt <= max_retries:
                 time.sleep(backoff)
                 backoff *= 2
                 continue
-            return FetchResult(False, None, None, _sanitize_error_message(str(exc), url), None)
+            elapsed = int(time.time() - started_at)
+            msg = f"{type(exc).__name__}: {exc} after {elapsed}s (attempt {attempt}/{max_retries + 1}, timeout={timeout}s, url={url})"
+            return FetchResult(False, None, None, _sanitize_error_message(msg, url), None)
 
 
 def fetch_ohlcv_history(*, symbol: str, interval: str, from_ts: int, to_ts: int, api_key: str, timeout: int = 30, max_retries: int = 1, min_retry_after_seconds: float = 1.0, max_retry_after_seconds: float = 120.0) -> FetchResult:
