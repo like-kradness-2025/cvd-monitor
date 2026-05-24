@@ -1,4 +1,0 @@
-pytest>=8.0
-mypy>=1.10
-types-requests>=2.32
-pandas-stubs>=2.2

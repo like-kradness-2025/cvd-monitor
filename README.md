@@ -1,15 +1,38 @@
 # cvd-monitor
 
-BTC の CVD (Cumulative Volume Delta) を CoinAlYZe API から取得し、SQLite に保存してダッシュボード化するための雛形です。
-
-## 構成
-- `src/cvd_monitor/coinalyze.py` : API クライアント
-- `src/cvd_monitor/cvd_calculator.py` : CVD 計算
-- `src/cvd_monitor/database.py` : SQLite 保存
-- `src/cvd_monitor/dashboard.py` : matplotlib によるチャート生成
-- `src/cvd_monitor/discord_sender.py` : Discord 送信
+Coinalyze `buy_volume` ベースの CVD (Cumulative Volume Delta) 監視ダッシュボード。
 
 ## セットアップ
-1. `.env.example` を `.env` にコピー
-2. `pip install -r requirements.txt`
-3. 必要に応じて scheduler を起動
+
+```bash
+cp .env.example .env
+# COINALYZE_API_KEY を設定
+pip install -r requirements.txt
+```
+
+## 使用方法
+
+```bash
+# データ取得
+python -m cvd_monitor receive --once --interval 5min --lookback-hours 6
+
+# CVD特徴量計算（日次ローリング）
+python -m cvd_monitor compute --interval 5min --rolling-hours 24
+
+# チャート描画
+python -m cvd_monitor render --interval 5min --window-hours 6 --output out/cvd.png
+
+# ワンショット実行
+python -m cvd_monitor run-once --interval 5min --lookback-hours 6 --output out/cvd.png
+
+# テスト
+pytest -q
+```
+
+## 機能
+
+- Coinalyze OHLCV データ受信
+- `buy_volume` ベースの CVD 計算（日次ローリング対応）
+- matplotlib ダッシュボード描画
+- Discord 通知（オプション）
+- Core20 ユニバース対応
